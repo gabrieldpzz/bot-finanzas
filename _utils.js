@@ -9,7 +9,7 @@ const supabaseHeaders = {
   'Prefer': 'return=minimal'
 };
 
-// Función para enviar mensajes a Telegram
+// Función para enviar mensajes a Telegram con soporte para botones y ForceReply
 export async function enviarMensaje(chatId, text, replyMarkup = null) {
   const payload = { chat_id: chatId, text: text };
   if (replyMarkup) payload.reply_markup = replyMarkup;
@@ -21,7 +21,7 @@ export async function enviarMensaje(chatId, text, replyMarkup = null) {
   });
 }
 
-// Función para insertar en Supabase
+// Función para insertar el ingreso en Supabase
 export async function guardarIngreso(chatId, monto, distribucion) {
   await fetch(`${supabaseUrl}/rest/v1/ingresos_historial`, {
     method: 'POST',
@@ -34,7 +34,7 @@ export async function guardarIngreso(chatId, monto, distribucion) {
   });
 }
 
-// Función para borrar el historial del usuario
+// Función para borrar el historial del usuario por su ID
 export async function borrarHistorial(chatId) {
   await fetch(`${supabaseUrl}/rest/v1/ingresos_historial?telegram_id=eq.${chatId}`, {
     method: 'DELETE',
