@@ -1,10 +1,15 @@
-import { enviarMensaje, guardarIngreso, borrarHistorial, obtenerGastos, guardarGastoFijo } from './_utils.js';
+import { 
+  enviarMensaje, guardarIngreso, obtenerUltimoIngreso, borrarHistorial, 
+  obtenerGastosFijosTodos, obtenerGastosFijosQuincena, guardarGastoFijo, 
+  guardarGastoVariable, obtenerGastosVariables, obtenerFechaSV 
+} from './_utils.js';
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(200).send('Bot activo y al 100.');
+  if (req.method !== 'POST') return res.status(200).send('Bot activo.');
 
   const body = req.body;
   const telegramToken = process.env.TELEGRAM_TOKEN;
+  const { mes: mesActual, quincena: quincenaActual } = obtenerFechaSV();
 
   // -----------------------------------------------------
   // 1. MANEJO DE BOTONES (Callback Queries)
@@ -14,131 +19,158 @@ export default async function handler(req, res) {
     const data = body.callback_query.data;
 
     if (data === 'btn_ingreso') {
-      // Validar si tiene gastos antes de dejarlo meter ingresos
-      const gastos = await obtenerGastos(chatId);
+      const gastos = await obtenerGastosFijosTodos(chatId);
       if (!gastos || gastos.length === 0) {
-        await enviarMensaje(chatId, "⚠️ Pérate maje. Antes de registrar ingresos, tenés que registrar al menos un Gasto Fijo para hacer bien el cálculo.\n\n📝 Ingresa el NOMBRE del gasto:", {
-          force_reply: true,
-          input_field_placeholder: "Ejemplo: Recibo de Internet"
-        });
+        await enviarMensaje(chatId, "⚠️ Pérate maje. Antes de registrar ingresos, tenés que registrar al menos un Gasto Fijo.\n\n📝 Ingresa el NOMBRE del gasto fijo:", { force_reply: true });
       } else {
-        await enviarMensaje(chatId, "💰 Ingresa el monto (solo números):", {
-          force_reply: true,
-          input_field_placeholder: "Ejemplo: 500"
-        });
+        await enviarMensaje(chatId, "💰 Ingresa el monto de tu ingreso (solo números):", { force_reply: true });
       }
     } 
     else if (data === 'btn_gasto') {
-      // Iniciar la cadena para agregar un nuevo gasto
-      await enviarMensaje(chatId, "📝 Ingresa el NOMBRE del gasto:", {
-        force_reply: true,
-        input_field_placeholder: "Ejemplo: Luz, Agua, Alquiler"
-      });
+      await enviarMensaje(chatId, "📝 Ingresa el NOMBRE del gasto fijo:", { force_reply: true });
     }
-    else if (data === 'btn_ver_gastos') {
-      const gastos = await obtenerGastos(chatId);
-      if (!gastos || gastos.length === 0) {
-        await enviarMensaje(chatId, "Aún no tenés gastos fijos guardados.");
+    else if (data === 'btn_gasto_diario') {
+      await enviarMensaje(chatId, "🛒 Ingresa el monto del gasto diario (ej: 5.50):", { force_reply: true });
+    }
+    else if (data === 'btn_ver_resumen') {
+      // LÓGICA DEL RESUMEN MAESTRO
+      const ingresoArr = await obtenerUltimoIngreso(chatId, mesActual, quincenaActual);
+      if (!ingresoArr || ingresoArr.length === 0) {
+        await enviarMensaje(chatId, "No has registrado ningún ingreso para esta quincena. Toca en 'Ingreso' primero.");
       } else {
-        let lista = "💸 *Tus Gastos Fijos:*\n\n";
-        gastos.forEach(g => {
-          lista += `- ${g.nombre_gasto}: $${g.monto} (Renueva: ${g.fecha_renovacion})\n`;
+        const ing = ingresoArr[0];
+        const dist = ing.distribucion_json;
+        
+        const fijos = await obtenerGastosFijosQuincena(chatId, quincenaActual);
+        const totalFijos = fijos.reduce((sum, g) => sum + g.monto, 0);
+
+        const variables = await obtenerGastosVariables(chatId, mesActual, quincenaActual);
+        let gastadoNec = 0; let gastadoDes = 0;
+        variables.forEach(v => {
+          if(v.categoria === 'NECESIDAD') gastadoNec += v.monto;
+          if(v.categoria === 'DESEO') gastadoDes += v.monto;
         });
-        await enviarMensaje(chatId, lista);
+
+        const disponibleNec = dist.necesidades_50 - totalFijos - gastadoNec;
+        const disponibleDes = dist.deseos_30 - gastadoDes;
+
+        let resText = `📊 *RESUMEN: MES ${mesActual} | QUINCENA ${quincenaActual}*\n`;
+        resText += `💰 Ingreso Total: $${ing.monto_ingreso}\n\n`;
+        
+        resText += `🛒 *NECESIDADES (50%): $${dist.necesidades_50.toFixed(2)}*\n`;
+        resText += `   - Fijos de quincena: -$${totalFijos.toFixed(2)}\n`;
+        resText += `   - Gastos diarios: -$${gastadoNec.toFixed(2)}\n`;
+        resText += `   >> *Disponible:* $${disponibleNec.toFixed(2)}\n\n`;
+
+        resText += `🎉 *DESEOS (30%): $${dist.deseos_30.toFixed(2)}*\n`;
+        resText += `   - Gastado: -$${gastadoDes.toFixed(2)}\n`;
+        resText += `   >> *Disponible:* $${disponibleDes.toFixed(2)}\n\n`;
+
+        resText += `🏦 *AHORRO/DEUDAS (20%): $${dist.ahorro_20.toFixed(2)}* (Intocable)`;
+
+        await enviarMensaje(chatId, resText);
       }
     }
     else if (data === 'btn_borrar_todo') {
       await borrarHistorial(chatId);
-      await enviarMensaje(chatId, "🧹 ¡Hecho, maje! Tu bóveda de ingresos y gastos está limpia.");
+      await enviarMensaje(chatId, "🧹 ¡Hecho, chucho! Toda tu base de datos fue formateada.");
     }
 
     await fetch(`https://api.telegram.org/bot${telegramToken}/answerCallbackQuery`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ callback_query_id: body.callback_query.id })
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ callback_query_id: body.callback_query.id })
     });
-
     return res.status(200).send('OK');
   }
 
   // -----------------------------------------------------
-  // 2. MANEJO DE MENSAJES DE TEXTO (Respuestas en Cadena)
+  // 2. MANEJO DE MENSAJES DE TEXTO (Cadenas)
   // -----------------------------------------------------
   if (body.message && body.message.text) {
     const chatId = body.message.chat.id;
     const texto = body.message.text.trim();
     const textoRespondido = body.message.reply_to_message ? body.message.reply_to_message.text : "";
 
-    // A. Respuesta a "Ingresar monto de INGRESO"
-    if (textoRespondido.includes("💰 Ingresa el monto")) {
+    // A. INGRESOS
+    if (textoRespondido.includes("💰 Ingresa el monto de tu ingreso")) {
       const monto = parseFloat(texto);
       if (!isNaN(monto)) {
-        // Aquí luego meteremos la resta de los gastos reales. Por ahora es el 50-30-20 base.
-        const distribucion = { necesidades_50: monto * 0.5, deseos_30: monto * 0.3, ahorro_20: monto * 0.2 };
-        await guardarIngreso(chatId, monto, distribucion);
-        const resumen = `¡Nítido! Ingreso de $${monto} guardado en la base.\n\n📊 *Distribución 50-30-20:*\nNecesidades: $${distribucion.necesidades_50}\nDeseos: $${distribucion.deseos_30}\nAhorro: $${distribucion.ahorro_20}`;
-        await enviarMensaje(chatId, resumen);
-      } else {
-        await enviarMensaje(chatId, "Ese no es un número válido. Intenta de nuevo.");
+        // Cálculo inicial 50-30-20
+        const dist = { necesidades_50: monto * 0.5, deseos_30: monto * 0.3, ahorro_20: monto * 0.2 };
+        await guardarIngreso(chatId, monto, dist, mesActual, quincenaActual);
+        
+        const fijos = await obtenerGastosFijosQuincena(chatId, quincenaActual);
+        const totalFijos = fijos.reduce((sum, g) => sum + g.monto, 0);
+        const libreNec = dist.necesidades_50 - totalFijos;
+
+        const msj = `¡Nítido! Ingreso guardado para Quincena ${quincenaActual}.\n\n` +
+                    `📊 *Tu 50% de Necesidades es: $${dist.necesidades_50.toFixed(2)}*\n` +
+                    `Se apartaron $${totalFijos.toFixed(2)} para gastos fijos.\n` +
+                    `Te quedan *$${libreNec.toFixed(2)}* para sobrevivir la quincena.\n\n` +
+                    `Toca en 'Resumen' para ver el cuadro completo.`;
+        await enviarMensaje(chatId, msj);
       }
       return res.status(200).send('OK');
     }
 
-    // B. Respuesta a "Ingresar NOMBRE de gasto" (Paso 1)
-    if (textoRespondido.includes("📝 Ingresa el NOMBRE del gasto")) {
-      const nombreGasto = texto;
-      await enviarMensaje(chatId, `💸 Ingresa el COSTO de "${nombreGasto}":`, {
-        force_reply: true,
-        input_field_placeholder: "Ejemplo: 35.50"
-      });
+    // B. GASTOS FIJOS (Cadena de 3 pasos)
+    if (textoRespondido.includes("📝 Ingresa el NOMBRE del gasto fijo")) {
+      await enviarMensaje(chatId, `💸 Ingresa el COSTO de "${texto}":`, { force_reply: true });
       return res.status(200).send('OK');
     }
-
-    // C. Respuesta a "Ingresar COSTO de gasto" (Paso 2)
     if (textoRespondido.includes("💸 Ingresa el COSTO de")) {
-      // Extraemos el nombre que viene entre comillas en el mensaje anterior
       const match = textoRespondido.match(/"([^"]+)"/);
       const nombreGasto = match ? match[1] : "Gasto";
       const costo = parseFloat(texto);
-
       if (!isNaN(costo)) {
-        await enviarMensaje(chatId, `📅 Ingresa la FECHA de renovación de "${nombreGasto}" ($${costo}). Formato DD/MM/AAAA:`, {
-          force_reply: true,
-          input_field_placeholder: "Ejemplo: 15/03/2026"
-        });
-      } else {
-        await enviarMensaje(chatId, "El costo debe ser un número. Volvé a empezar el registro.");
+        await enviarMensaje(chatId, `📅 ¿En qué QUINCENA se paga "${nombreGasto}" ($${costo})? Responde solo 1 o 2:`, { force_reply: true });
       }
       return res.status(200).send('OK');
     }
-
-    // D. Respuesta a "Ingresar FECHA de gasto" (Paso 3 Final)
-    if (textoRespondido.includes("📅 Ingresa la FECHA de renovación de")) {
-      // Extraemos nombre y costo con Regex del mensaje anterior
-      const regex = /"([^"]+)" \(\$([0-9.]+)\)/;
-      const match = textoRespondido.match(regex);
-      
+    if (textoRespondido.includes("📅 ¿En qué QUINCENA se paga")) {
+      const match = textoRespondido.match(/paga "([^"]+)" \(\$([0-9.]+)\)\?/);
       if (match) {
-        const nombreGasto = match[1];
+        const nombre = match[1];
         const costo = parseFloat(match[2]);
-        const fecha = texto; // Aquí entra la fecha DD/MM/AAAA
-
-        await guardarGastoFijo(chatId, nombreGasto, costo, fecha);
-        await enviarMensaje(chatId, `✅ ¡Perro, ya estuvo! El gasto fijo "${nombreGasto}" por $${costo} que se paga el ${fecha} ha sido guardado exitosamente.`);
+        const quincena = parseInt(texto);
+        if (quincena === 1 || quincena === 2) {
+          await guardarGastoFijo(chatId, nombre, costo, quincena);
+          await enviarMensaje(chatId, `✅ ¡Uf! Gasto fijo "${nombre}" guardado para la Quincena ${quincena}.`);
+        } else {
+          await enviarMensaje(chatId, "Maje, la quincena solo puede ser 1 o 2. Volvé a empezar desde el menú.");
+        }
       }
       return res.status(200).send('OK');
     }
 
-    // Menú Principal
+    // C. GASTOS DIARIOS (Cadena de 2 pasos)
+    if (textoRespondido.includes("🛒 Ingresa el monto del gasto diario")) {
+      const monto = parseFloat(texto);
+      if (!isNaN(monto)) {
+        await enviarMensaje(chatId, `🏷️ ¿El gasto de $${monto} fue Necesidad o Deseo? Responde N o D:`, { force_reply: true });
+      }
+      return res.status(200).send('OK');
+    }
+    if (textoRespondido.includes("🏷️ ¿El gasto de $")) {
+      const match = textoRespondido.match(/\$([0-9.]+)/);
+      const monto = match ? parseFloat(match[1]) : 0;
+      const letra = texto.toUpperCase();
+      const categoria = letra === 'D' ? 'DESEO' : 'NECESIDAD';
+      
+      await guardarGastoVariable(chatId, monto, categoria, mesActual, quincenaActual);
+      await enviarMensaje(chatId, `✅ Gasto de $${monto} restado de tu cuenta de ${categoria}.`);
+      return res.status(200).send('OK');
+    }
+
+    // D. MENU PRINCIPAL
     if (texto.startsWith('/start') || texto.startsWith('/menu')) {
       const menuBotones = {
         inline_keyboard: [
-          [{ text: '💰 Registrar Ingreso', callback_data: 'btn_ingreso' }],
-          [{ text: '➕ Agregar Gasto Fijo', callback_data: 'btn_gasto' }, { text: '💸 Ver Mis Gastos', callback_data: 'btn_ver_gastos' }],
-          [{ text: '🗑️ Borrar Historial', callback_data: 'btn_borrar_todo' }]
+          [{ text: '💰 Ingreso', callback_data: 'btn_ingreso' }, { text: '📊 Resumen', callback_data: 'btn_ver_resumen' }],
+          [{ text: '➕ Gasto Fijo', callback_data: 'btn_gasto' }, { text: '🛒 Gasto Diario', callback_data: 'btn_gasto_diario' }],
+          [{ text: '🗑️ Borrar Todo', callback_data: 'btn_borrar_todo' }]
         ]
       };
-      await enviarMensaje(chatId, "¿Qué ondas? ¿Qué vamos a revisar hoy?", menuBotones);
+      await enviarMensaje(chatId, `¿Qué ondas? Estamos en la *Quincena ${quincenaActual}* del *Mes ${mesActual}*. ¿Qué toca hacer hoy?`, menuBotones);
     }
   }
 
