@@ -5,7 +5,7 @@ import {
 } from './_utils.js';
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(200).send('Bot activo.');
+  if (req.method !== 'POST') return res.status(200).send('Bot activo chuchuruxo.');
 
   const body = req.body;
   const telegramToken = process.env.TELEGRAM_TOKEN;
@@ -16,10 +16,12 @@ export default async function handler(req, res) {
   // -----------------------------------------------------
   if (body.callback_query) {
     const chatId = body.callback_query.message.chat.id;
-    const messageId = body.callback_query.message.message_id;
+    let messageId = null;
+    if (body.callback_query.message) {
+      messageId = body.callback_query.message.message_id;
+    }
     const data = body.callback_query.data;
 
-    // A. FLUJO PRINCIPAL Y MENÚS
     if (data === 'btn_ingreso') {
       const gastos = await obtenerGastosFijosTodos(chatId);
       if (!gastos || gastos.length === 0) {
@@ -36,7 +38,7 @@ export default async function handler(req, res) {
     }
     else if (data === 'btn_ver_resumen') {
       // -----------------------------------------------------
-      // LÓGICA DEL RESUMEN CON GRÁFICO UVA
+      // LÓGICA DEL RESUMEN CON GRÁFICO DE BARRAS
       // -----------------------------------------------------
       const ingresoArr = await obtenerUltimoIngreso(chatId, mesActual, quincenaActual);
       if (!ingresoArr || ingresoArr.length === 0) {
@@ -55,18 +57,23 @@ export default async function handler(req, res) {
           if(v.categoria === 'DESEO') gastadoDes += v.monto;
         });
 
-        // Cálculo de lo que queda
-        const disponibleNec = dist.necesidades_50 - totalFijos - gastadoNec;
+        // Sumas totales para el gráfico
+        const gastoTotalNec = totalFijos + gastadoNec;
+        const disponibleNec = dist.necesidades_50 - gastoTotalNec;
         const disponibleDes = dist.deseos_30 - gastadoDes;
 
-        // GENERAR GRÁFICO (Usa montos bases del 50-30-20)
-        const urlImagen = generarUrlGrafico(dist.necesidades_50, dist.deseos_30, dist.ahorro_20);
+        // GENERAR GRÁFICO DE BARRAS APILADAS
+        const urlImagen = generarUrlGrafico(
+          gastoTotalNec, disponibleNec, // Necesidades (Rojo, Verde)
+          gastadoDes, disponibleDes,    // Deseos (Rojo, Verde)
+          0, dist.ahorro_20             // Ahorro (Cero gastado, todo disponible)
+        );
 
         let resText = `📊 *RESUMEN: Mes ${mesActual} | Quincena ${quincenaActual}*\n`;
         resText += `💰 Ingreso Total: $${ing.monto_ingreso.toFixed(2)}\n\n`;
         
         resText += `🛑 *NECESIDADES (50%): $${dist.necesidades_50.toFixed(2)}*\n`;
-        resText += `   - Gastos Fijos: -$${totalFijos.toFixed(2)}\n`;
+        resText += `   - Fijos Quincena: -$${totalFijos.toFixed(2)}\n`;
         resText += `   - Gastos Diarios: -$${gastadoNec.toFixed(2)}\n`;
         resText += `   >> *Disponible:* $${disponibleNec.toFixed(2)}\n\n`;
 
@@ -76,7 +83,6 @@ export default async function handler(req, res) {
 
         resText += `🏦 *AHORRO/DEUDAS (20%): $${dist.ahorro_20.toFixed(2)}*`;
 
-        // Mandamos la imagen y el texto como pie de foto
         await enviarImagen(chatId, urlImagen, resText);
       }
     }
@@ -85,45 +91,53 @@ export default async function handler(req, res) {
       await enviarMensaje(chatId, "🧹 ¡Hecho, chucho! Toda tu base de datos fue formateada exitosamente.");
     }
 
-    // B. MANEJO DE BOTONES DE SELECCIÓN (NUEVO)
-    
-    // Selección de Quincena (Flujo Gasto Fijo)
+    // B. MANEJO DE BOTONES DE SELECCIÓN DE CATEGORÍA Y QUINCENA
     else if (data.startsWith('set_quin_')) {
-      const partes = data.split('_'); // set_quin_1_Costo_35.5
-      const quincena = parseInt(partes[2]);
-      const costo = parseFloat(partes[4]);
-      const nombre = data.split('paga_')[1].split('_costo')[0]; // Extraer nombre del data string
+      // Extraemos datos del callback
+      // Formato: set_quin_1_paga_Luz_costo_35.5
+      const regex = /set_quin_(\d+)_paga_(.*)_costo_([\d.]+)/;
+      const match = data.match(regex);
+      
+      if (match) {
+        const quincena = parseInt(match[1]);
+        const nombre = match[2];
+        const costo = parseFloat(match[3]);
 
-      await guardarGastoFijo(chatId, nombre, costo, quincena);
-      
-      // Borrar el mensaje de los botones para no hacer spam
-      await fetch(`https://api.telegram.org/bot${telegramToken}/deleteMessage`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, message_id: messageId })
-      });
-      
-      await enviarMensaje(chatId, `✅ ¡Uf, perrito! Gasto fijo "${nombre}" guardado para la Quincena ${quincena}. UVA.`);
+        await guardarGastoFijo(chatId, nombre, costo, quincena);
+        
+        if (messageId) {
+          await fetch(`https://api.telegram.org/bot${telegramToken}/deleteMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, message_id: messageId })
+          });
+        }
+        await enviarMensaje(chatId, `✅ ¡Uf, perrito! Gasto fijo "${nombre}" guardado para la Quincena ${quincena}.`);
+      }
     }
 
-    // Selección de Categoría (Flujo Gasto Diario)
     else if (data.startsWith('set_cat_')) {
-      const partes = data.split('_'); // set_cat_NECESIDAD_monto_10.5
-      const categoria = partes[2];
-      const monto = parseFloat(partes[4]);
-      
-      await guardarGastoVariable(chatId, monto, categoria, mesActual, quincenaActual);
-      
-      // Borrar mensaje de botones
-      await fetch(`https://api.telegram.org/bot${telegramToken}/deleteMessage`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: chatId, message_id: messageId })
-      });
+      // Formato: set_cat_NECESIDAD_monto_10.5
+      const regex = /set_cat_(.*)_monto_([\d.]+)/;
+      const match = data.match(regex);
 
-      const emoji = categoria === 'DESEO' ? '🎉' : '🛑';
-      await enviarMensaje(chatId, `✅ ${emoji} Gasto diario de $${monto.toFixed(2)} restado de tu cuenta de ${categoria}.`);
+      if (match) {
+        const categoria = match[1];
+        const monto = parseFloat(match[2]);
+        
+        await guardarGastoVariable(chatId, monto, categoria, mesActual, quincenaActual);
+        
+        if (messageId) {
+          await fetch(`https://api.telegram.org/bot${telegramToken}/deleteMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, message_id: messageId })
+          });
+        }
+
+        const emoji = categoria === 'DESEO' ? '🎉' : '🛑';
+        await enviarMensaje(chatId, `✅ ${emoji} Gasto diario de $${monto.toFixed(2)} restado de tu cuenta de ${categoria}.`);
+      }
     }
 
-    // Quitar el relojito de carga
     await fetch(`https://api.telegram.org/bot${telegramToken}/answerCallbackQuery`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ callback_query_id: body.callback_query.id })
@@ -154,7 +168,7 @@ export default async function handler(req, res) {
                     `🛑 Necesidades (50%): $${dist.necesidades_50.toFixed(2)}\n` +
                     `Apartados para fijos: -$${totalFijos.toFixed(2)}\n` +
                     `Te quedan *$${libreNec.toFixed(2)}* para diario en esta quincena.\n\n` +
-                    `Toca en 'Resumen' para ver el gráfico UVA.`;
+                    `Toca en 'Resumen' para ver las barras de progreso.`;
         await enviarMensaje(chatId, msj);
       } else {
         await enviarMensaje(chatId, "⚠️ Ingresa un número válido y mayor a cero, maje.");
@@ -162,7 +176,7 @@ export default async function handler(req, res) {
       return res.status(200).send('OK');
     }
 
-    // B. GASTOS FIJOS (Flujo con botones al final)
+    // B. GASTOS FIJOS
     if (textoRespondido.includes("📝 Ingresa el NOMBRE del gasto fijo")) {
       await enviarMensaje(chatId, `💸 Ingresa el COSTO mensual de "${texto}" (solo números):`, { force_reply: true });
       return res.status(200).send('OK');
@@ -172,7 +186,6 @@ export default async function handler(req, res) {
       const nombreGasto = match ? match[1] : "Gasto";
       const costo = parseFloat(texto);
       if (!isNaN(costo) && costo > 0) {
-        // !!! AQUÍ ESTÁ EL CAMBIO A BOTONES UVA !!!
         const botonesQuincena = {
           inline_keyboard: [
             [
@@ -188,11 +201,10 @@ export default async function handler(req, res) {
       return res.status(200).send('OK');
     }
 
-    // C. GASTOS DIARIOS (Flujo con botones al final)
+    // C. GASTOS DIARIOS
     if (textoRespondido.includes("🛒 Ingresa el monto del gasto diario")) {
       const monto = parseFloat(texto);
       if (!isNaN(monto) && monto > 0) {
-        // !!! AQUÍ ESTÁ EL CAMBIO A BOTONES UVA !!!
         const botonesCategoria = {
           inline_keyboard: [
             [
@@ -212,7 +224,7 @@ export default async function handler(req, res) {
     if (texto.startsWith('/start') || texto.startsWith('/menu')) {
       const menuBotones = {
         inline_keyboard: [
-          [{ text: '📊 Ver Resumen UVA', callback_data: 'btn_ver_resumen' }],
+          [{ text: '📊 Ver Resumen (Barras)', callback_data: 'btn_ver_resumen' }],
           [{ text: '💰 Ingreso', callback_data: 'btn_ingreso' }, { text: '➕ Gasto Fijo', callback_data: 'btn_gasto' }],
           [{ text: '🛒 Gasto Diario', callback_data: 'btn_gasto_diario' }, { text: '🗑️ Borrar Todo', callback_data: 'btn_borrar_todo' }]
         ]
