@@ -9,7 +9,6 @@ const supabaseHeaders = {
   'Prefer': 'return=minimal'
 };
 
-// Función para enviar mensajes a Telegram con soporte para botones y ForceReply
 export async function enviarMensaje(chatId, text, replyMarkup = null) {
   const payload = { chat_id: chatId, text: text };
   if (replyMarkup) payload.reply_markup = replyMarkup;
@@ -21,7 +20,6 @@ export async function enviarMensaje(chatId, text, replyMarkup = null) {
   });
 }
 
-// Función para insertar el ingreso en Supabase
 export async function guardarIngreso(chatId, monto, distribucion) {
   await fetch(`${supabaseUrl}/rest/v1/ingresos_historial`, {
     method: 'POST',
@@ -34,9 +32,36 @@ export async function guardarIngreso(chatId, monto, distribucion) {
   });
 }
 
-// Función para borrar el historial del usuario por su ID
+// NUEVO: Consultar si el usuario ya tiene gastos fijos
+export async function obtenerGastos(chatId) {
+  const res = await fetch(`${supabaseUrl}/rest/v1/gastos_fijos?telegram_id=eq.${chatId}&select=*`, {
+    method: 'GET',
+    headers: supabaseHeaders
+  });
+  const data = await res.json();
+  return data; // Retorna un array con los gastos
+}
+
+// NUEVO: Guardar un gasto fijo nuevo
+export async function guardarGastoFijo(chatId, nombre, costo, fecha) {
+  await fetch(`${supabaseUrl}/rest/v1/gastos_fijos`, {
+    method: 'POST',
+    headers: supabaseHeaders,
+    body: JSON.stringify({
+      telegram_id: chatId,
+      nombre_gasto: nombre,
+      monto: costo,
+      fecha_renovacion: fecha
+    })
+  });
+}
+
 export async function borrarHistorial(chatId) {
   await fetch(`${supabaseUrl}/rest/v1/ingresos_historial?telegram_id=eq.${chatId}`, {
+    method: 'DELETE',
+    headers: supabaseHeaders
+  });
+  await fetch(`${supabaseUrl}/rest/v1/gastos_fijos?telegram_id=eq.${chatId}`, {
     method: 'DELETE',
     headers: supabaseHeaders
   });
