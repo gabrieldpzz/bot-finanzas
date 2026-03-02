@@ -9,7 +9,6 @@ const supabaseHeaders = {
   'Prefer': 'return=minimal'
 };
 
-// Obtiene la fecha exacta en El Salvador
 export function obtenerFechaSV() {
   const dtf = new Intl.DateTimeFormat('en-US', { timeZone: 'America/El_Salvador', month: 'numeric', day: 'numeric', year: 'numeric' });
   const partes = dtf.formatToParts(new Date());
@@ -19,7 +18,6 @@ export function obtenerFechaSV() {
   return { mes, quincena: dia <= 15 ? 1 : 2, horaFormat: horaSV.getHours() + ":" + horaSV.getMinutes() };
 }
 
-// Función para enviar mensajes de texto normales o con botones
 export async function enviarMensaje(chatId, text, replyMarkup = null) {
   const payload = { chat_id: chatId, text: text, parse_mode: 'Markdown' };
   if (replyMarkup) payload.reply_markup = replyMarkup;
@@ -28,7 +26,6 @@ export async function enviarMensaje(chatId, text, replyMarkup = null) {
   });
 }
 
-// NUEVO: Función para enviar una imagen por URL a Telegram
 export async function enviarImagen(chatId, imageUrl, caption = "") {
   await fetch(`https://api.telegram.org/bot${telegramToken}/sendPhoto`, {
     method: 'POST',
@@ -95,43 +92,43 @@ export async function borrarHistorial(chatId) {
 }
 
 // -----------------------------------------------------
-// MAGIA: Generar URL del gráfico con QuickChart.io
+// GRÁFICO DE BARRAS DE PROGRESO (Chuchuruxo Style)
 // -----------------------------------------------------
-export function generarUrlGrafico(necesidades, deseos, ahorro) {
-  // Configuración del gráfico en formato JSON para la API
+export function generarUrlGrafico(gastadoNec, dispNec, gastadoDes, dispDes, gastadoAho, dispAho) {
   const chartConfig = {
-    type: 'pie', // Gráfico circular
+    type: 'horizontalBar',
     data: {
-      labels: [`Nec ($${necesidades})`, `Des ($${deseos})`, `Aho ($${ahorro})`],
-      datasets: [{
-        data: [necesidades, deseos, ahorro],
-        backgroundColor: ['#FF6384', '#36A2EB', '#FFCE56'], // Colores fresas
-        borderWidth: 2,
-        borderColor: '#fff'
-      }]
+      labels: ['Necesidades', 'Deseos', 'Ahorro'],
+      datasets: [
+        {
+          label: 'Gastado',
+          data: [gastadoNec, gastadoDes, gastadoAho],
+          backgroundColor: '#FF4D4D', // Rojo (peligro)
+        },
+        {
+          label: 'Disponible',
+          data: [dispNec, dispDes, dispAho],
+          backgroundColor: '#4CAF50', // Verde (billete)
+        }
+      ]
     },
     options: {
-      legend: { position: 'bottom', labels: { fontSize: 16, fontStyle: 'bold' } },
-      title: { display: true, text: 'Distribución Quincenal', fontSize: 22 },
-      // Plugins para mostrar el porcentaje adentro
+      title: { display: true, text: 'Progreso del Presupuesto ($)', fontSize: 20 },
+      scales: {
+        xAxes: [{ stacked: true }],
+        yAxes: [{ stacked: true }]
+      },
       plugins: {
         datalabels: {
-          display: true,
-          color: 'white',
-          font: { weight: 'bold', size: 16 },
-          formatter: (value, ctx) => {
-            let sum = 0;
-            let dataArr = ctx.chart.data.datasets[0].data;
-            dataArr.map(data => { sum += data; });
-            let percentage = (value * 100 / sum).toFixed(0) + "%";
-            return percentage;
-          }
+          color: '#ffffff',
+          font: { weight: 'bold', size: 14 },
+          // Solo muestra el número si es mayor a cero para que no se vea amontonado
+          formatter: (value) => value > 0 ? '$' + value.toFixed(0) : ''
         }
       }
     }
   };
 
-  // Convertimos el JSON a una cadena segura para URL y armamos el enlace final
   const encodedConfig = encodeURIComponent(JSON.stringify(chartConfig));
-  return `https://quickchart.io/chart?c=${encodedConfig}&bg=white&w=500&h=400`;
+  return `https://quickchart.io/chart?c=${encodedConfig}&bg=white&w=600&h=350`;
 }
